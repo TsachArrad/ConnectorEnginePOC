@@ -6,7 +6,7 @@ import shlex
 import subprocess
 import tempfile
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 from typing import Literal
 
@@ -14,6 +14,12 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from openai import AzureOpenAI
+import requests as http_requests
+
+# Import validation functions from engine.py
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from engine import validate_connector_shape, validate_configuration, OrchestratorError
 
 load_dotenv()
 
@@ -66,10 +72,65 @@ class ExecuteConnectorResponse(BaseModel):
 
 
 
+def _load_prompt_template() -> str:
+    """Load the connector JSON schema prompt from fixtures/how to prompt.txt"""
+    prompt_path = Path(__file__).parent.parent / "fixtures" / "how to prompt.txt"
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="Prompt template file not found")
+
+
+def _validate_connector_json(connector_json: dict[str, Any]) -> tuple[bool, str | None]:
+    """Validate connector JSON using engine.py validators.
+    Returns (is_valid, error_message)
+    """
+    try:
+        # Validate shape (files, requirements, runtime)
+        validate_connector_shape(connector_json)
+        
+        # Validate configuration if present
+        configuration = connector_json.get("configuration", {})
+        configuration_types = connector_json.get("configurationTypes")
+        if configuration and configuration_types:
+            validate_configuration(configuration, configuration_types)
+        
+        return True, None
+    except OrchestratorError as e:
+        return False, str(e)
+    except Exception as e:
+        return False, f"Validation error: {str(e)}"
+
+
+def _extract_json_from_text(text: str) -> dict[str, Any] | None:
+    """Extract JSON object from text, handling markdown code blocks."""
+    # Try to find JSON within markdown code blocks
+    json_patterns = [
+        r"```json\s*\n(.*?)\n```",
+        r"```\s*\n(.*?)\n```",
+        r"\{[^}]*\}",
+    ]
+    
+    for pattern in json_patterns:
+        matches = re.findall(pattern, text, re.DOTALL)
+        for match in matches:
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
+    
+    # Try parsing the entire text as JSON
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
 def _get_client() -> AzureOpenAI:
-    api_key = os.getenv("AZURE_OPENAI_API_KEY")
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+    api_key = 'DAMxRHeLOWlar0mJcxBS0McuJw54EMcHYwm0MNVboV8l6vFIkB3CJQQJ99BKACF24PCXJ3w3AAAAACOGO7qx'
+    endpoint = 'https://genor-prod-uaenorth-oai.cognitiveservices.azure.com'
+    api_version = '2024-04-01-preview'
 
     if not api_key:
         raise HTTPException(status_code=500, detail="AZURE_OPENAI_API_KEY is not set")
@@ -538,9 +599,27 @@ def health() -> dict[str, str]:
     y =x + "sdfsdf"
     return {"status": "ok"}
 
+
+@app.get("/get-file/{file_name}")
+def get_file(file_name: str) -> dict[str, Any]:
+    url = f"https://localhost:62925/api/Connector/{file_name}"
+    try:
+        resp = http_requests.get(url, verify=False, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except http_requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Connector API: {exc}") from exc
+    except http_requests.exceptions.HTTPError as exc:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text) from exc
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Response is not valid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch file: {exc}") from exc
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest) -> ChatResponse:
     model = payload.model or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    print(f"Using model: {model}")
     if not model:
         raise HTTPException(status_code=500, detail="AZURE_OPENAI_DEPLOYMENT is not set")
 
@@ -551,23 +630,76 @@ def chat(payload: ChatRequest) -> ChatResponse:
     max_tokens = payload.max_tokens if payload.max_tokens is not None else default_max_tokens
 
     try:
+        # Load the connector JSON schema prompt template
+        prompt_template = _load_prompt_template()
+        
+        
+        
+        
+        
+        # Prepare messages: system prompt + user messages
+        enhanced_messages = [
+            {"role": "system", "content": prompt_template}
+        ]
+        enhanced_messages.extend([m.model_dump() for m in payload.messages])
+        print(prompt_template)
         client = _get_client()
+        
+        # First call: Generate the connector
+        print("Generating connector...")
         completion = client.chat.completions.create(
-            model=model,
-            messages=[m.model_dump() for m in payload.messages],
-            temperature=temperature,
-            max_tokens=max_tokens,
+            model=model or 'gpt-5',
+            messages=enhanced_messages,
+            response_format={"type": "json_object"},
+            max_completion_tokens=10000,
         )
-
         content = completion.choices[0].message.content
+        
+        print(f"Generated content length: {len(content) if content else 0}")
         if not content:
             raise HTTPException(status_code=502, detail="Model returned empty content")
-
+        
+        # Extract JSON from the response
+        connector_json = _extract_json_from_text(content)
+        
+        if not connector_json:
+            raise HTTPException(status_code=502, detail="Could not extract valid JSON from response")
+        
         return ChatResponse(model=model, reply=content)
+        # Validate using engine.py
+        
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"OpenAI request failed: {exc}") from exc
+
+
+class AddToStorageRequest(BaseModel):
+    Content: str = Field(min_length=1)
+    Name: str = Field(min_length=1)
+
+
+@app.post("/add-to-storage")
+def add_to_storage(payload: AddToStorageRequest) -> dict[str, Any]:
+    url = "https://localhost:62925/api/Connector/add-to-storage"
+    try:
+        resp = http_requests.post(
+            url,
+            json=payload.model_dump(),
+            verify=False,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except Exception:
+            return {"status": resp.status_code, "body": resp.text}
+    except http_requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach storage API: {exc}") from exc
+    except http_requests.exceptions.HTTPError as exc:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage request failed: {exc}") from exc
 
 
 @app.post("/execute-connector", response_model=ExecuteConnectorResponse)
@@ -578,6 +710,115 @@ def execute_connector(payload: ExecuteConnectorRequest) -> ExecuteConnectorRespo
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Connector execution engine failed: {exc}") from exc
+
+
+@app.get("/validate-connector/{file_name:path}")
+def validate_connector(file_name: str) -> dict[str, Any]:
+    """
+    1. Fetch connector JSON from https://localhost:62925/api/Connector/get-file/{file_name}
+    2. Validate it using engine.py validators
+    3. Return validation result
+    """
+    # Step 1: Fetch the connector JSON
+    print(f"Fetching connector JSON for validation: {file_name}")
+    url = f"https://localhost:62925/api/Connector/get-file/{file_name}"
+    try:
+        resp = http_requests.get(url, verify=False, timeout=600)
+        resp.raise_for_status()
+        connector_json = resp.json()
+    except http_requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Connector API: {exc}") from exc
+    except http_requests.exceptions.HTTPError as exc:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text) from exc
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Response is not valid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch connector: {exc}") from exc
+    
+    # Step 2: Validate using engine.py validators
+    print(f"Validating connector: {file_name}")
+    is_valid, error_message = _validate_connector_json(connector_json)
+    
+    # Step 3: Return validation result
+    if is_valid:
+        return {
+            "ok": True,
+            "valid": True,
+            "file_name": file_name,
+            "message": "Connector JSON is valid"
+        }
+    else:
+        return {
+            "ok": False,
+            "valid": False,
+            "file_name": file_name,
+            "error": error_message
+        }
+
+
+@app.get("/run-engine/{file_name:path}")
+def run_engine(file_name: str) -> dict[str, Any]:
+    """
+    1. Fetch connector JSON from https://localhost:62925/api/Connector/{file_name}
+    2. Write it to a temp file
+    3. Run: python engine.py <temp_file>
+    4. Return engine.py's JSON output
+    """
+    # Step 1: Fetch the connector JSON
+    print(f"Fetching connector JSON for file: {file_name}")
+    url = f"https://localhost:62925/api/Connector/get-file/{file_name}"
+    try:
+        resp = http_requests.get(url, verify=False, timeout=600)
+        resp.raise_for_status()
+        connector_json = resp.json()
+    except http_requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Connector API: {exc}") from exc
+    except http_requests.exceptions.HTTPError as exc:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch connector: {exc}") from exc
+
+    # Step 2: Write to temp file and run engine.py
+    engine_path = Path(__file__).parent.parent / "engine.py"
+    if not engine_path.exists():
+        raise HTTPException(status_code=500, detail="engine.py not found")
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as tmp:
+            json.dump(connector_json, tmp)
+            tmp_path = tmp.name
+        print(f"Fetched JSON for file: {file_name}")
+        # Step 3: Run engine.py as subprocess
+        result = subprocess.run(
+            [sys.executable, str(engine_path), tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    # Step 4: Parse and return engine.py output
+    stdout_text = result.stdout.strip() if result.stdout else ""
+    stderr_text = result.stderr.strip() if result.stderr else ""
+
+    parsed = _parse_json_if_possible(stdout_text)
+    if isinstance(parsed, dict):
+        return parsed
+
+    return {
+        "ok": result.returncode == 0,
+        "exit_code": result.returncode,
+        "stdout": stdout_text or None,
+        "stderr": stderr_text or None,
+    }
 
 
 if __name__ == "__main__":

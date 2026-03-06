@@ -1,0 +1,41 @@
+.run-engine-container {
+  max-width: 1000px;
+}
+
+.run-engine-container h2 {
+  color: #2c3e50;
+  margin-bottom: 0.5rem;
+}
+
+.run-engine-form {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  margin-bottom: 2rem;
+}
+
+.result-data,
+.output-section {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+}
+
+.output-section.stderr {
+  background: #fff5f5;
+  border-color: #fcc;
+}
+
+.result-data pre,
+.output-section pre {
+  margin-top: 0.5rem;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}

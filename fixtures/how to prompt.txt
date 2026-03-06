@@ -1,17 +1,17 @@
-# Connector JSON Schema for `kata_orchestrator`
+Connector JSON Schema
 
-You are generating a **connector JSON file** that will be passed to `kata_orchestrator.py` — a Docker-based sandbox orchestrator that runs untrusted Python code inside a container. Your JSON must conform exactly to the following contract.
+You are generating a **connector JSON file** 
 
-## Top-Level Structure
+All of the top level json us REQUIRED!
 
 ```json
 {
-  "auth":                { ... },       // Optional. Object with credentials/secrets.
-  "configurationTypes":  { ... },       // Optional. Describes & validates "configuration" fields.
-  "configuration":       { ... },       // Optional. Runtime settings passed to the code.
-  "requirements":        [ ... ],       // Optional. Python pip packages to install.
-  "runtime":             { ... },       // Optional. Execution controls (entrypoint, limits).
-  "files":               { ... }        // **REQUIRED**. Map of filename → Python source code.
+  "auth":                { ... },       //  Object with credentials/secrets.
+  "configurationTypes":  { ... },       //  Describes & validates "configuration" fields.
+  "configuration":       { ... },       //  Runtime settings passed to the code.
+  "requirements":        [ ... ],       //  Python pip packages to install.
+  "runtime":             { ... },       //  Execution controls (entrypoint, limits).
+  "files":               { ... }        //  Map of filename → Python source code.
 }
 ```
 
@@ -19,7 +19,7 @@ Any extra top-level keys are preserved and forwarded as-is into the container's 
 
 ---
 
-## `files` (REQUIRED)
+`files` (REQUIRED)
 
 An object mapping **relative file paths** to their **string content**. These files are written to `/run/code/` inside the container.
 
@@ -29,6 +29,8 @@ An object mapping **relative file paths** to their **string content**. These fil
 - Values must be strings (the file content)
 - Subdirectories are created automatically
 - One of these files must be the entrypoint (see `runtime.entryPoint`)
+-if needs you can add dew keys but they must have relation between to be operated as part of the docker
+- each key that will represent  code will be written in one line (mandatory!)
 
 ```json
 "files": {
@@ -39,7 +41,7 @@ An object mapping **relative file paths** to their **string content**. These fil
 
 ---
 
-## `runtime` (Optional)
+`runtime` (Optional)
 
 Controls how the code is executed inside the container.
 
@@ -63,7 +65,7 @@ Controls how the code is executed inside the container.
 
 ---
 
-## `requirements` (Optional)
+`requirements` (required)
 
 Array of pip package specifiers to install before running the entrypoint.
 
@@ -81,7 +83,7 @@ Array of pip package specifiers to install before running the entrypoint.
 
 ---
 
-## `auth` (Optional)
+`auth` (required)
 
 Object containing credentials or secrets. Can have any structure. Top-level scalar values are flattened into container environment variables with prefix `AUTH_`:
 
@@ -96,17 +98,12 @@ Object containing credentials or secrets. Can have any structure. Top-level scal
 
 Only top-level scalar values (string, number, boolean, null) are flattened. Nested objects are NOT flattened to env vars but ARE available in `/run/connector.json`.
 
-You can use `{{env:VAR_NAME}}` placeholders in string values — they are resolved from the host environment before execution:
+You cannot use `{{env:VAR_NAME}}` placeholders
 
-```json
-"auth": {
-  "token": "{{env:MY_SECRET_TOKEN}}"
-}
-```
 
 ---
 
-## `configuration` (Optional)
+ `configuration` (required)
 
 Object containing runtime settings for your code. Any structure is allowed. Top-level scalar values are flattened into container env vars with prefix `CONFIG_`:
 
@@ -125,7 +122,7 @@ If an `--input` JSON is also provided at runtime, its `configuration` is **shall
 
 ---
 
-## `configurationTypes` (Optional)
+ `configurationTypes` (required)
 
 Describes and validates the **fields of `configuration`** using a simple type descriptor format. The orchestrator builds a JSON Schema from this and validates `configuration` against it.
 
@@ -156,75 +153,3 @@ Each field descriptor is an object with:
 }
 ```
 
----
-
-## How Your Code Accesses Data at Runtime
-
-Inside the container, your Python entrypoint has:
-
-| What | Where |
-|------|-------|
-| Full connector JSON (all fields) | File: `/run/connector.json` (path also in env `CONNECTOR_JSON_PATH`) |
-| Input JSON (if provided) | File: `/run/input.json` (path also in env `INPUT_JSON_PATH`) |
-| Auth scalars | Env vars: `AUTH_<KEY>` |
-| Config scalars | Env vars: `CONFIG_<KEY>` |
-| Writable directory | `/workspace` (1GB tmpfs) |
-| Temp directory | `/tmp` (64MB tmpfs) |
-| Code files | `/run/code/` (read-only) |
-
-**Recommended pattern for reading config:**
-
-```python
-import json, os
-
-config_path = os.environ.get("CONNECTOR_JSON_PATH", "/run/connector.json")
-with open(config_path) as f:
-    connector = json.load(f)
-
-auth = connector.get("auth", {})
-config = connector.get("configuration", {})
-```
-
----
-
-## Output Contract
-
-- Your code's **stdout** is captured as the result. Ideally print **exactly one JSON object** to stdout.
-- **stderr** is captured as logs (visible on error).
-- Exit code `0` = success, anything else = failure.
-
----
-
-## Complete Minimal Example
-
-```json
-{
-  "files": {
-    "main.py": "import json\nimport os\n\npath = os.environ.get('CONNECTOR_JSON_PATH', '/run/connector.json')\nwith open(path) as f:\n    data = json.load(f)\n\nresult = {'message': 'Hello from sandbox', 'config': data.get('configuration', {})}\nprint(json.dumps(result))\n"
-  },
-  "runtime": {
-    "entryPoint": "main.py",
-    "timeoutMs": 10000,
-    "memoryMb": 128,
-    "cpus": 0.5
-  }
-}
-```
-
-
-
-Prompt
-
-You are expert at **** 
-Please read **** doce 
-{detailed and appropriate prompt describing what to acheive}
-
-please follow below info to create the right schema
-
-
-
--------------------------
-after that, need to ask the ai if needs to change somehing in the derived json , it will make sure not to change the code of the executor but the json himself
-make sure the value wont come from env file but from the json only
-
-than return it to the client

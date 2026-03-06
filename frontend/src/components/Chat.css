@@ -1,0 +1,129 @@
+.chat-container {
+  max-width: 900px;
+}
+
+.chat-container h2 {
+  color: #2c3e50;
+  margin-bottom: 0.5rem;
+}
+
+.description {
+  color: #666;
+  margin-bottom: 2rem;
+}
+
+.chat-form {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  margin-bottom: 2rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #2c3e50;
+  font-weight: 500;
+}
+
+.form-group textarea,
+.form-group input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-family: inherit;
+}
+
+.form-group textarea {
+  resize: vertical;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.form-group textarea:focus,
+.form-group input:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.btn-primary {
+  background: #3498db;
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  font-size: 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #2980b9;
+}
+
+.btn-primary:disabled {
+  background: #bdc3c7;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: #95a5a6;
+  color: white;
+  border: none;
+  padding: 0.5rem 1.5rem;
+  font-size: 0.9rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-top: 1rem;
+}
+
+.btn-secondary:hover {
+  background: #7f8c8d;
+}
+
+.error-box {
+  background: #fee;
+  border: 1px solid #fcc;
+  color: #c33;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+}
+
+.response-box {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.response-box h3 {
+  color: #2c3e50;
+  margin-bottom: 1rem;
+}
+
+.response-meta {
+  font-size: 0.9rem;
+  color: #666;
+  margin-bottom: 1rem;
+}
+
+.json-output {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  padding: 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  max-height: 600px;
+  overflow-y: auto;
+}
