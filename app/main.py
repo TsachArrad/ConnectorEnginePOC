@@ -128,9 +128,9 @@ def _extract_json_from_text(text: str) -> dict[str, Any] | None:
 
 
 def _get_client() -> AzureOpenAI:
-    api_key = 'DAMxRHeLOWlar0mJcxBS0McuJw54EMcHYwm0MNVboV8l6vFIkB3CJQQJ99BKACF24PCXJ3w3AAAAACOGO7qx'
-    endpoint = 'https://genor-prod-uaenorth-oai.cognitiveservices.azure.com'
-    api_version = '2024-04-01-preview'
+    api_key = os.getenv('AZURE_OPENAI_API_KEY')
+    endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+    api_version = os.getenv('AZURE_OPENAI_API_VERSION', '2024-04-01-preview')
 
     if not api_key:
         raise HTTPException(status_code=500, detail="AZURE_OPENAI_API_KEY is not set")
