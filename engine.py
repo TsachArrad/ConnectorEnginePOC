@@ -588,7 +588,8 @@ def build_docker_command(
 "--ipc=none",
 "--ulimit", "nofile=256:256",
 "--ulimit", "nproc=64:64",
-"--runtime=runsc",
+"--runtime=runsc"
+
 ]
 
     if has_input:

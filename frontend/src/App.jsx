@@ -3,6 +3,7 @@ import Chat from './components/Chat'
 import Storage from './components/Storage'
 import Validation from './components/Validation'
 import RunEngine from './components/RunEngine'
+import Debug from './components/Debug'
 import './App.css'
 
 function App() {
@@ -12,7 +13,8 @@ function App() {
     { id: 'chat', label: 'Chat' },
     { id: 'storage', label: 'Storage' },
     { id: 'validation', label: 'Validation' },
-    { id: 'engine', label: 'Run Engine' }
+    { id: 'engine', label: 'Run Engine' },
+    { id: 'debug', label: 'Debug' }
   ]
 
   return (
@@ -38,6 +40,7 @@ function App() {
         {activeTab === 'storage' && <Storage />}
         {activeTab === 'validation' && <Validation />}
         {activeTab === 'engine' && <RunEngine />}
+        {activeTab === 'debug' && <Debug />}
       </div>
     </div>
   )

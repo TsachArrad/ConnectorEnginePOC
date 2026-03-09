@@ -821,6 +821,120 @@ def run_engine(file_name: str) -> dict[str, Any]:
     }
 
 
+@app.post("/run-engine-with-json")
+def run_engine_with_json(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run engine.py with a provided connector JSON (already edited by the user).
+    Payload: {"connector": {full connector JSON including files}}
+    """
+    connector_json = payload.get("connector")
+    if not connector_json or not isinstance(connector_json, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'connector'")
+
+    engine_path = Path(__file__).parent.parent / "engine.py"
+    if not engine_path.exists():
+        raise HTTPException(status_code=500, detail="engine.py not found")
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False, encoding="utf-8"
+        ) as tmp:
+            json.dump(connector_json, tmp)
+            tmp_path = tmp.name
+
+        result = subprocess.run(
+            [sys.executable, str(engine_path), tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    stdout_text = result.stdout.strip() if result.stdout else ""
+    stderr_text = result.stderr.strip() if result.stderr else ""
+
+    parsed = _parse_json_if_possible(stdout_text)
+    if isinstance(parsed, dict):
+        return parsed
+
+    return {
+        "ok": result.returncode == 0,
+        "exit_code": result.returncode,
+        "stdout": stdout_text or None,
+        "stderr": stderr_text or None,
+    }
+
+
+@app.get("/debug/connector/{file_name}")
+def get_connector_for_debug(file_name: str) -> dict[str, Any]:
+    """
+    Fetch connector JSON from external API and return its files for debugging.
+    Returns: {"files": {"path/to/file.py": "code content", ...}}
+    """
+    url = f"https://uploaderbe-b4dbh9eec3hmh5ep.westeurope-01.azurewebsites.net/api/Connector/get-file/{file_name}"
+    try:
+        resp = http_requests.get(url, verify=False, timeout=30)
+        resp.raise_for_status()
+        connector_json = resp.json()
+        
+        # Extract files map
+        files = connector_json.get("files", {})
+        if not isinstance(files, dict):
+            raise HTTPException(status_code=400, detail="Connector does not contain valid 'files' object")
+        
+        return {"files": files, "connector": connector_json}
+    except http_requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Connector API: {exc}") from exc
+    except http_requests.exceptions.HTTPError as exc:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text) from exc
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Response is not valid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch connector: {exc}") from exc
+
+
+@app.post("/debug/save-connector")
+def save_connector(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Save the full connector JSON with updated files back to storage.
+    Payload: {"file_name": "connector.json", "connector": {full connector object with updated files}}
+    """
+    file_name = payload.get("file_name")
+    connector = payload.get("connector")
+
+    if not file_name or not isinstance(file_name, str):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'file_name'")
+    if not connector or not isinstance(connector, dict):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'connector'")
+    if "files" not in connector or not isinstance(connector.get("files"), dict):
+        raise HTTPException(status_code=400, detail="Connector must contain a valid 'files' map")
+
+    url = "https://uploaderbe-b4dbh9eec3hmh5ep.westeurope-01.azurewebsites.net/api/Connector/add-to-storage"
+    try:
+        resp = http_requests.post(
+            url,
+            json={"Content": json.dumps(connector, ensure_ascii=False), "Name": file_name},
+            verify=False,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        try:
+            return {"ok": True, "response": resp.json()}
+        except Exception:
+            return {"ok": True, "response": resp.text}
+    except http_requests.exceptions.ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=f"Cannot reach storage API: {exc}") from exc
+    except http_requests.exceptions.HTTPError as exc:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Save failed: {exc}") from exc
+
+
 if __name__ == "__main__":
     import uvicorn
     from pathlib import Path
