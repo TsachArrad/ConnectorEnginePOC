@@ -1,0 +1,106 @@
+{
+  "auth": {
+    "tenantId": "",
+    "clientId": "",
+    "clientSecret": ""
+  },
+  "configurationTypes": {
+    "fromMailbox": {
+      "type": "string",
+      "required": true,
+      "description": "The shared mailbox or user to send as (userPrincipalName or email address)."
+    },
+    "to": {
+      "type": "array",
+      "required": true,
+      "description": "Array of recipient email addresses."
+    },
+    "cc": {
+      "type": "array",
+      "required": false,
+      "default": [],
+      "description": "Array of CC recipient email addresses."
+    },
+    "bcc": {
+      "type": "array",
+      "required": false,
+      "default": [],
+      "description": "Array of BCC recipient email addresses."
+    },
+    "subject": {
+      "type": "string",
+      "required": true,
+      "description": "Email subject."
+    },
+    "body": {
+      "type": "string",
+      "required": true,
+      "description": "Email body content."
+    },
+    "bodyType": {
+      "type": "string",
+      "required": false,
+      "default": "html",
+      "enum": ["html", "text"],
+      "description": "Body content type: 'html' or 'text'."
+    },
+    "replyTo": {
+      "type": "array",
+      "required": false,
+      "default": [],
+      "description": "Array of reply-to email addresses."
+    },
+    "importance": {
+      "type": "string",
+      "required": false,
+      "default": "normal",
+      "enum": ["low", "normal", "high"],
+      "description": "Email importance."
+    },
+    "saveToSentItems": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Whether to save the email in Sent Items."
+    },
+    "attachments": {
+      "type": "array",
+      "required": false,
+      "default": [],
+      "description": "Array of attachment objects: { name, contentType, contentBytes(base64) }."
+    },
+    "dryRun": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "If true, do not send; just output the payload."
+    }
+  },
+  "configuration": {
+    "fromMailbox": "",
+    "to": [],
+    "cc": [],
+    "bcc": [],
+    "subject": "",
+    "body": "",
+    "bodyType": "html",
+    "replyTo": [],
+    "importance": "normal",
+    "saveToSentItems": true,
+    "attachments": [],
+    "dryRun": false
+  },
+  "requirements": [
+    "requests==2.31.0",
+    "msal==1.27.0"
+  ],
+  "runtime": {
+    "entryPoint": "main.py",
+    "timeoutMs": 60000,
+    "memoryMb": 256,
+    "cpus": 0.5
+  },
+  "files": {
+    "main.py": "import json,base64,requests,msal\n\ndef load_connector():\n    try:\n        with open('/run/connector.json','r') as f:\n            return json.load(f)\n    except Exception as e:\n        return {\"error\": f\"Failed to load connector.json: {e}\"}\n\ndef build_recipients(lst):\n    return [{\"emailAddress\": {\"address\": str(addr).strip()}} for addr in (lst or []) if isinstance(addr, str) and str(addr).strip()]\n\ndef map_val(val, mapping):\n    return mapping.get(str(val).lower(), mapping.get('default'))\n\ndef main():\n    data = load_connector()\n    if isinstance(data, dict) and 'error' in data:\n        print(json.dumps({\"ok\": False, \"error\": data['error']}))\n        return\n    cfg = data.get('configuration', {})\n    auth = data.get('auth', {})\n    tenant_id = str(auth.get('tenantId', '')).strip()\n    client_id = str(auth.get('clientId', '')).strip()\n    client_secret = str(auth.get('clientSecret', '')).strip()\n    from_mailbox = str(cfg.get('fromMailbox', '')).strip()\n    subject = str(cfg.get('subject', '')).strip()\n    body = str(cfg.get('body', ''))\n    body_type = str(cfg.get('bodyType', 'html'))\n    to = cfg.get('to', [])\n    cc = cfg.get('cc', [])\n    bcc = cfg.get('bcc', [])\n    reply_to = cfg.get('replyTo', [])\n    importance = str(cfg.get('importance', 'normal'))\n    save_to_sent = bool(cfg.get('saveToSentItems', True))\n    dry_run = bool(cfg.get('dryRun', False))\n    attachments = cfg.get('attachments', [])\n    errors = []\n    for name, val in [('tenantId', tenant_id), ('clientId', client_id), ('clientSecret', client_secret), ('fromMailbox', from_mailbox), ('subject', subject), ('body', body)]:\n        if not val:\n            errors.append(f\"Missing required field: {name}\")\n    if not isinstance(to, list) or len(build_recipients(to)) == 0:\n        errors.append(\"Configuration 'to' must be a non-empty array of email strings.\")\n    if errors:\n        print(json.dumps({\"ok\": False, \"error\": \"; \".join(errors)}))\n        return\n    body_type_map = {\"html\": \"HTML\", \"text\": \"Text\", \"default\": \"HTML\"}\n    importance_map = {\"low\": \"Low\", \"normal\": \"Normal\", \"high\": \"High\", \"default\": \"Normal\"}\n    message = {\n        \"subject\": subject,\n        \"body\": {\"contentType\": map_val(body_type, body_type_map), \"content\": body},\n        \"toRecipients\": build_recipients(to)\n    }\n    if isinstance(cc, list) and cc:\n        message[\"ccRecipients\"] = build_recipients(cc)\n    if isinstance(bcc, list) and bcc:\n        message[\"bccRecipients\"] = build_recipients(bcc)\n    if isinstance(reply_to, list) and reply_to:\n        message[\"replyTo\"] = build_recipients(reply_to)\n    # Attachments: expecting objects with name, contentType, contentBytes (base64)\n    if isinstance(attachments, list) and attachments:\n        msg_attachments = []\n        for att in attachments:\n            try:\n                name = str(att.get('name', '')).strip()\n                content_type = str(att.get('contentType', 'application/octet-stream'))\n                content_bytes = str(att.get('contentBytes', '')).strip()\n                if name and content_bytes:\n                    msg_attachments.append({\"@odata.type\": \"#microsoft.graph.fileAttachment\", \"name\": name, \"contentType\": content_type, \"contentBytes\": content_bytes})\n            except Exception:\n                continue\n        if msg_attachments:\n            message[\"attachments\"] = msg_attachments\n    payload = {\"message\": message, \"saveToSentItems\": save_to_sent}\n    if dry_run:\n        print(json.dumps({\"ok\": True, \"dryRun\": True, \"payload\": payload}))\n        return\n    try:\n        authority = f\"https://login.microsoftonline.com/{tenant_id}\"\n        app = msal.ConfidentialClientApplication(client_id, authority=authority, client_credential=client_secret)\n        token_result = app.acquire_token_for_client(scopes=[\"https://graph.microsoft.com/.default\"])\n        if 'access_token' not in token_result:\n            print(json.dumps({\"ok\": False, \"error\": \"Failed to acquire token\", \"details\": token_result}))\n            return\n        access_token = token_result['access_token']\n    except Exception as e:\n        print(json.dumps({\"ok\": False, \"error\": f\"Auth exception: {e}\"}))\n        return\n    url = f\"https://graph.microsoft.com/v1.0/users/{from_mailbox}/sendMail\"\n    headers = {\"Authorization\": f\"Bearer {access_token}\", \"Content-Type\": \"application/json\"}\n    try:\n        resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)\n        if resp.status_code in (202, 200):\n            print(json.dumps({\"ok\": True, \"statusCode\": resp.status_code, \"sent\": {\"from\": from_mailbox, \"to\": to, \"cc\": cc, \"bcc\": bcc}, \"saveToSentItems\": save_to_sent}))\n        else:\n            try:\n                err = resp.json()\n            except Exception:\n                err = {\"text\": resp.text}\n            print(json.dumps({\"ok\": False, \"statusCode\": resp.status_code, \"error\": err}))\n    except Exception as e:\n        print(json.dumps({\"ok\": False, \"error\": f\"Request exception: {e}\"}))\n\nif __name__ == '__main__':\n    main()\n"
+  }
+}

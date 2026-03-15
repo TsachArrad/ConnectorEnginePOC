@@ -9,8 +9,14 @@ export default function Debug() {
   const [selectedFile, setSelectedFile] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fixing, setFixing] = useState(false);
   const [error, setError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
+  const [fixErrorText, setFixErrorText] = useState('');
+  const [selectedForFix, setSelectedForFix] = useState('');
+  const [fixedCode, setFixedCode] = useState('');
+  const [solutionHint, setSolutionHint] = useState('');
+  const [enableInternetSearch, setEnableInternetSearch] = useState(false);
   const currentCodeRef = useRef('');
 
   const loadConnector = async () => {
@@ -40,6 +46,9 @@ export default function Debug() {
       setConnectorData(data);
       setEditedFiles({ ...files });
       setSelectedFile('');
+      setSelectedForFix('');
+      setFixedCode('');
+      setFixErrorText('');
       currentCodeRef.current = '';
     } catch (err) {
       setError(err.message);
@@ -130,6 +139,70 @@ export default function Debug() {
     return langMap[ext] || 'plaintext';
   };
 
+  const handleSelectForFix = (filePath) => {
+    setSelectedForFix(filePath);
+    setFixedCode('');
+  };
+
+  const handleCopyFixedCode = () => {
+    if (selectedForFix && fixedCode) {
+      setEditedFiles(prev => ({ ...prev, [selectedForFix]: fixedCode }));
+      currentCodeRef.current = fixedCode;
+      setSelectedFile('');
+      setTimeout(() => setSelectedFile(selectedForFix), 0);
+      setSaveMessage('Fixed code copied to editor. Review and save when ready.');
+      setFixedCode('');
+    }
+  };
+
+  const handleFixError = async () => {
+    if (!selectedForFix) {
+      setError('Please select a file to fix');
+      return;
+    }
+    if (!fixErrorText.trim()) {
+      setError('Please enter the error text');
+      return;
+    }
+
+    setFixing(true);
+    setError('');
+    setSaveMessage('');
+    setFixedCode('');
+
+    try {
+      const response = await fetch('/fix-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: fileName,
+          error: fixErrorText,
+          filePath: selectedForFix,
+          solution_hint: solutionHint || undefined,
+          enable_internet_search: enableInternetSearch,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(err.detail || 'Fix request failed');
+      }
+
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Fix failed');
+      }
+
+      setFixedCode(data.fixed_code || '');
+      setSaveMessage('Fixed code generated. Review below and click "Copy to Editor" to apply.');
+    } catch (err) {
+      setError(err.message);
+      setFixedCode('');
+    } finally {
+      setFixing(false);
+    }
+  };
+
   const fileList = Object.keys(editedFiles);
 
   return (
@@ -163,12 +236,58 @@ export default function Debug() {
                 <li
                   key={filePath}
                   className={selectedFile === filePath ? 'selected' : ''}
-                  onClick={() => handleFileSelect(filePath)}
                 >
-                  {filePath}
+                  <span className="debug-file-label" onClick={() => handleFileSelect(filePath)}>
+                    {filePath}
+                  </span>
                 </li>
               ))}
             </ul>
+
+            <div className="debug-fix-section">
+              <h3>Fix Error</h3>
+              <label className="debug-fix-label">Select file to fix (required):</label>
+              <select
+                className="debug-fix-select"
+                value={selectedForFix}
+                onChange={(e) => handleSelectForFix(e.target.value)}
+              >
+                <option value="">-- Select a file --</option>
+                {fileList.map(fp => (
+                  <option key={fp} value={fp}>{fp}</option>
+                ))}
+              </select>
+              <textarea
+                className="debug-fix-textarea"
+                placeholder="Paste the error text here..."
+                value={fixErrorText}
+                onChange={(e) => setFixErrorText(e.target.value)}
+                rows={4}
+              />
+              <label className="debug-fix-label">Solution hint (optional):</label>
+              <textarea
+                className="debug-fix-textarea"
+                placeholder="Optional: Provide guidance to direct the AI (e.g., 'Try using the v2 API endpoint')..."
+                value={solutionHint}
+                onChange={(e) => setSolutionHint(e.target.value)}
+                rows={3}
+              />
+              <label className="debug-fix-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={enableInternetSearch}
+                  onChange={(e) => setEnableInternetSearch(e.target.checked)}
+                />
+                Enable internet search for real-time information
+              </label>
+              <button
+                onClick={handleFixError}
+                disabled={fixing || !selectedForFix || !fixErrorText.trim()}
+                className="debug-btn debug-btn-fix"
+              >
+                {fixing ? 'Fixing...' : 'Fix Error'}
+              </button>
+            </div>
           </div>
 
           <div className="debug-editor">
@@ -209,6 +328,20 @@ export default function Debug() {
             {saving ? 'Saving...' : 'Save All Files'}
           </button>
         </div>
+
+        {fixedCode && (
+          <div className="debug-fixed-section">
+            <div className="debug-fixed-header">
+              <h3>Fixed Code for: {selectedForFix}</h3>
+              <button onClick={handleCopyFixedCode} className="debug-btn debug-btn-copy">
+                Copy to Editor
+              </button>
+            </div>
+            <div className="debug-fixed-code">
+              <pre><code>{fixedCode}</code></pre>
+            </div>
+          </div>
+        )}
         </>
       )}
     </div>

@@ -1,0 +1,188 @@
+{
+    "auth": {
+        "method": "basic",
+        "username": "tsach@actionai.co",
+        "passwordOrToken": "ATATT3xFfGF0Le3JQmDb3XIX1H9X8Fxc9Ceu0eNCiVk0I9KYS7IWsDqP55brw16O6jJRu2DC8PiTPUKFakMSOCZm_BFLQGq5k_EFVLBWOI0ThZ10pVALubuYoWbU9hbmVstnabi3J5GpJfJBky05CyIXcGgRT2-tKZCMHxn0o9qodSKqAF7-sDA=1D951110",
+        "bearerToken": null,
+        "extraHeaders": {}
+    },
+    "configurationTypes": {
+        "baseUrl": {
+            "type": "string|null",
+            "required": true,
+            "description": "Base URL of the Jira instance, e.g. https://your-domain.atlassian.net or https://jira.company.com"
+        },
+        "projectKey": {
+            "type": "string|null",
+            "required": true,
+            "description": "Jira project key where the issue will be created (e.g., ENG, TEST)."
+        },
+        "issueTypeName": {
+            "type": "string|null",
+            "required": false,
+            "description": "Issue type name (e.g., Task, Bug). Provide either issueTypeName or issueTypeId."
+        },
+        "issueTypeId": {
+            "type": "string|null",
+            "required": false,
+            "description": "Issue type ID. Provide either issueTypeName or issueTypeId."
+        },
+        "summary": {
+            "type": "string|null",
+            "required": true,
+            "description": "Issue summary/title."
+        },
+        "description": {
+            "type": "string|null",
+            "required": false,
+            "default": null,
+            "description": "Issue description in plain text. Will be converted to Atlassian Document Format when using API v3."
+        },
+        "priorityName": {
+            "type": "string|null",
+            "required": false,
+            "description": "Priority name (e.g., Highest, High, Medium, Low)."
+        },
+        "priorityId": {
+            "type": "string|null",
+            "required": false,
+            "description": "Priority ID, if known."
+        },
+        "labels": {
+            "type": "array",
+            "required": false,
+            "default": [],
+            "description": "Array of string labels to apply to the issue."
+        },
+        "components": {
+            "type": "array",
+            "required": false,
+            "default": [],
+            "description": "Array of component names (strings) or IDs (strings) to associate with the issue."
+        },
+        "assigneeAccountId": {
+            "type": "string|null",
+            "required": false,
+            "description": "Account ID of the assignee (recommended for Jira Cloud)."
+        },
+        "assigneeName": {
+            "type": "string|null",
+            "required": false,
+            "description": "Username of the assignee (Jira Server/Data Center)."
+        },
+        "reporterAccountId": {
+            "type": "string|null",
+            "required": false,
+            "description": "Account ID of the reporter (Jira Cloud)."
+        },
+        "reporterName": {
+            "type": "string|null",
+            "required": false,
+            "description": "Username of the reporter (Jira Server/Data Center)."
+        },
+        "parentKey": {
+            "type": "string|null",
+            "required": false,
+            "description": "Parent issue key for sub-tasks (e.g., ENG-123)."
+        },
+        "epicKey": {
+            "type": "string|null",
+            "required": false,
+            "description": "Epic key to link this issue to, when applicable."
+        },
+        "epicLinkFieldKey": {
+            "type": "string|null",
+            "required": false,
+            "default": "customfield_10014",
+            "description": "Field key for Epic Link (commonly customfield_10014)."
+        },
+        "extraFields": {
+            "type": "object",
+            "required": false,
+            "default": {},
+            "description": "Raw Jira fields object to merge into the payload. Keys like customfield_XXXXX supported."
+        },
+        "verifySsl": {
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "description": "Whether to verify SSL certificates."
+        },
+        "apiVersion": {
+            "type": "integer",
+            "required": false,
+            "enum": [
+                2,
+                3
+            ],
+            "default": 2,
+            "description": "Jira REST API version to target. 2 is broadly compatible; 3 requires ADF for rich text."
+        },
+        "dryRun": {
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "description": "If true, validates input and outputs the request payload without making an API call."
+        },
+        "timeoutSeconds": {
+            "type": "integer",
+            "required": false,
+            "default": 30,
+            "description": "HTTP request timeout in seconds."
+        },
+        "maxRetries": {
+            "type": "integer",
+            "required": false,
+            "default": 3,
+            "description": "Max retry attempts for transient errors (429/5xx)."
+        },
+        "retryBackoffBaseMs": {
+            "type": "integer",
+            "required": false,
+            "default": 500,
+            "description": "Base backoff in milliseconds for exponential retry."
+        },
+        "debug": {
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "description": "If true, emits debug logs to stderr."
+        }
+    },
+    "configuration": {
+        "baseUrl": "https://gcc-innovative.atlassian.net",
+        "projectKey": "AAP",
+        "issueTypeName": "Task",
+        "issueTypeId": null,
+        "summary": "Sample ticket created by connector",
+        "description": "This is a sample issue created in dry-run mode.",
+        "priorityName": null,
+        "priorityId": null,
+        "labels": [],
+        "components": [],
+        "assigneeAccountId": null,
+        "assigneeName": "Tsach Arrad",
+        "reporterAccountId": null,
+        "reporterName": null,
+        "parentKey": null,
+        "epicKey": null,
+        "epicLinkFieldKey": "customfield_10014",
+        "extraFields": {},
+        "verifySsl": true,
+        "apiVersion": 2,
+        "dryRun": true,
+        "timeoutSeconds": 30,
+        "maxRetries": 3,
+        "retryBackoffBaseMs": 500,
+        "debug": false
+    },
+    "requirements": [
+        "requests==2.31.0"
+    ],
+    "runtime": {
+        "entryPoint": "main.py",
+        "timeoutMs": 90000,
+        "memoryMb": 256,
+        "cpus": 0.5
+    }
+}

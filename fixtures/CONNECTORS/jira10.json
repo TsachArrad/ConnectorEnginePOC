@@ -1,0 +1,49 @@
+{
+  "auth": {
+    "baseUrl": "",
+    "email": "",
+    "apiToken": ""
+  },
+  "configurationTypes": {
+    "projectKey": {
+      "type": "string",
+      "required": true,
+      "description": "Jira project key (e.g., ABC)"
+    },
+    "assigneeAccountId": {
+      "type": "string",
+      "required": true,
+      "description": "Jira Cloud accountId of the assignee"
+    },
+    "maxIssues": {
+      "type": "integer",
+      "required": false,
+      "default": 50,
+      "description": "Maximum number of issues to fetch"
+    },
+    "dryRun": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "If true, validates inputs and shows the request that would be sent without calling Jira"
+    }
+  },
+  "configuration": {
+    "projectKey": "",
+    "assigneeAccountId": "",
+    "maxIssues": 50,
+    "dryRun": false
+  },
+  "requirements": [
+    "requests"
+  ],
+  "runtime": {
+    "entryPoint": "main.py",
+    "timeoutMs": 60000,
+    "memoryMb": 256,
+    "cpus": 1
+  },
+  "files": {
+    "main.py": "import json\nimport sys\nimport traceback\nimport requests\nimport time\n\nCONNECTOR_PATH = \"/run/connector.json\"\n\n\ndef load_context():\n    with open(CONNECTOR_PATH, \"r\", encoding=\"utf-8\") as f:\n        data = json.load(f)\n    auth = data.get(\"auth\") or {}\n    cfg = data.get(\"configuration\") or {}\n    return auth, cfg\n\n\ndef fail(message, **details):\n    out = {\"status\": \"error\", \"message\": message}\n    if details:\n        out.update(details)\n    print(json.dumps(out))\n    sys.exit(1)\n\n\ndef quote_jql_string(value):\n    if value is None:\n        return '\"\"'\n    # Escape backslashes and quotes in the value for safe JQL\n    s = str(value).replace(\"\\\\\", \"\\\\\\\\\").replace('\"', '\\\\\"')\n    return f'\"{s}\"'\n\n\ndef build_jql(project_key, assignee_account_id):\n    # For Jira Cloud, using accountId for user fields is required and should not be quoted.\n    # Project keys are quoted and escaped for safety.\n    return f'project = {quote_jql_string(project_key)} AND assignee = {assignee_account_id}'\n\n\ndef parse_positive_int(value, default):\n    try:\n        n = int(value)\n    except Exception:\n        return default\n    return max(0, n)\n\n\ndef do_request_with_retries(method, url, headers, params, auth, timeout=30, max_attempts=3):\n    attempt = 0\n    while attempt < max_attempts:\n        try:\n            resp = requests.request(method, url, headers=headers, params=params, auth=auth, timeout=timeout)\n        except Exception:\n            attempt += 1\n            if attempt >= max_attempts:\n                raise\n            time.sleep(min(2 ** attempt, 8))\n            continue\n        if resp.status_code in (429, 502, 503, 504):\n            attempt += 1\n            if attempt >= max_attempts:\n                return resp\n            retry_after = resp.headers.get(\"Retry-After\")\n            wait = None\n            if retry_after:\n                try:\n                    wait = int(retry_after)\n                except Exception:\n                    wait = None\n            if wait is None:\n                wait = min(2 ** attempt, 8)\n            time.sleep(wait)\n            continue\n        return resp\n    return resp\n\n\ndef main():\n    try:\n        auth, cfg = load_context()\n\n        base_url = (auth.get(\"baseUrl\") or \"\").strip()\n        email = (auth.get(\"email\") or \"\").strip()\n        api_token = (auth.get(\"apiToken\") or \"\").strip()\n\n        project_key = (cfg.get(\"projectKey\") or \"\").strip()\n        assignee_account_id = (cfg.get(\"assigneeAccountId\") or \"\").strip()\n        # Normalize if user accidentally wrapped it in quotes\n        if assignee_account_id.startswith('\"') and assignee_account_id.endswith('\"'):\n            assignee_account_id = assignee_account_id[1:-1].strip()\n\n        max_issues = parse_positive_int(cfg.get(\"maxIssues\", 50), 50)\n        dry_run = bool(cfg.get(\"dryRun\", False))\n\n        # Validate inputs\n        missing = []\n        if not base_url:\n            missing.append(\"auth.baseUrl\")\n        if not email:\n            missing.append(\"auth.email\")\n        if not api_token:\n            missing.append(\"auth.apiToken\")\n        if not project_key:\n            missing.append(\"configuration.projectKey\")\n        if not assignee_account_id:\n            missing.append(\"configuration.assigneeAccountId\")\n        if missing:\n            fail(\"Missing required inputs\", missing=missing)\n\n        base_url = base_url.rstrip(\"/\")\n        if not (base_url.startswith(\"http://\") or base_url.startswith(\"https://\")):\n            fail(\"Invalid baseUrl: must start with http:// or https://\", baseUrl=base_url)\n\n        # Build JQL\n        jql = build_jql(project_key, assignee_account_id)\n\n        # Prepare request details\n        endpoint = f\"{base_url}/rest/api/3/search\"\n        headers = {\n            \"Accept\": \"application/json\",\n            \"User-Agent\": \"ai-connector-jira/1.0\"\n        }\n\n        if dry_run:\n            planned_batches = []\n            remaining = max_issues\n            start_at = 0\n            while remaining > 0:\n                batch_size = remaining if remaining < 100 else 100\n                planned_batches.append({\n                    \"method\": \"GET\",\n                    \"url\": endpoint,\n                    \"params\": {\n                        \"jql\": jql,\n                        \"startAt\": start_at,\n                        \"maxResults\": batch_size,\n                        \"fields\": \"summary,status,assignee,project\"\n                    }\n                })\n                remaining -= batch_size\n                start_at += batch_size\n            print(json.dumps({\n                \"status\": \"dry_run\",\n                \"message\": \"Validated configuration. No request sent.\",\n                \"jql\": jql,\n                \"batchesPlanned\": planned_batches\n            }))\n            return\n\n        issues = []\n        total = None\n        remaining = max_issues\n        start_at = 0\n\n        while remaining > 0:\n            batch_size = remaining if remaining < 100 else 100\n            params = {\n                \"jql\": jql,\n                \"startAt\": start_at,\n                \"maxResults\": batch_size,\n                \"fields\": \"summary,status,assignee,project\"\n            }\n            try:\n                resp = do_request_with_retries(\n                    method=\"GET\",\n                    url=endpoint,\n                    headers=headers,\n                    params=params,\n                    auth=(email, api_token),\n                    timeout=30,\n                    max_attempts=3\n                )\n            except Exception as e:\n                fail(\"Network or request error when calling Jira\", exception_type=type(e).__name__, detail=str(e))\n\n            if resp.status_code >= 400:\n                try:\n                    err_body = resp.json()\n                except Exception:\n                    err_body = {\"text\": resp.text}\n                fail(\"Jira API returned an error\", status_code=resp.status_code, response=err_body)\n\n            data = resp.json()\n            if total is None:\n                total = data.get(\"total\")\n\n            for it in data.get(\"issues\", []):\n                fields = it.get(\"fields\") or {}\n                status = fields.get(\"status\") or {}\n                assignee = fields.get(\"assignee\") or {}\n                project = fields.get(\"project\") or {}\n                issues.append({\n                    \"id\": it.get(\"id\"),\n                    \"key\": it.get(\"key\"),\n                    \"self\": it.get(\"self\"),\n                    \"summary\": fields.get(\"summary\"),\n                    \"status\": status.get(\"name\"),\n                    \"assigneeDisplayName\": assignee.get(\"displayName\"),\n                    \"assigneeAccountId\": assignee.get(\"accountId\"),\n                    \"projectKey\": project.get(\"key\"),\n                    \"projectName\": project.get(\"name\")\n                })\n                if len(issues) >= max_issues:\n                    break\n\n            fetched = len(data.get(\"issues\", []))\n            if fetched == 0 or len(issues) >= max_issues:\n                break\n\n            remaining = max_issues - len(issues)\n            start_at += fetched\n\n        print(json.dumps({\n            \"status\": \"ok\",\n            \"jql\": jql,\n            \"requestedMax\": max_issues,\n            \"returned\": len(issues),\n            \"total\": total,\n            \"issues\": issues\n        }))\n\n    except SystemExit:\n        raise\n    except Exception as e:\n        print(json.dumps({\n            \"status\": \"error\",\n            \"message\": \"Unhandled exception\",\n            \"exception_type\": type(e).__name__,\n            \"error\": str(e),\n            \"traceback\": traceback.format_exc()\n        }))\n        sys.exit(1)\n\n\nif __name__ == \"__main__\":\n    main()\n"
+  }
+}

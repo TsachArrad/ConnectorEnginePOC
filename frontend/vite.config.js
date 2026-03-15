@@ -14,6 +14,10 @@ export default defineConfig({
       '/debug': {
         target: 'http://localhost:8000',
         changeOrigin: true
+      },
+      '/fix-error': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
       }
     }
   }

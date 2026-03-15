@@ -1,0 +1,95 @@
+{
+	"auth": {
+		"email": "tsach@actionai.co",
+		"apiToken": "ATATT3xFfGF0Le3JQmDb3XIX1H9X8Fxc9Ceu0eNCiVk0I9KYS7IWsDqP55brw16O6jJRu2DC8PiTPUKFakMSOCZm_BFLQGq5k_EFVLBWOI0ThZ10pVALubuYoWbU9hbmVstnabi3J5GpJfJBky05CyIXcGgRT2-tKZCMHxn0o9qodSKqAF7-sDA=1D951110"
+	},
+	"configurationTypes": {
+		"baseUrl": {
+			"type": "string",
+			"required": true,
+			"description": "Jira Cloud base URL, e.g. https://your-domain.atlassian.net"
+		},
+		"projectKey": {
+			"type": "string",
+			"required": true,
+			"description": "Jira project key to listen on, e.g. ENG"
+		},
+		"stopOnAssigneeAccountId": {
+			"type": "string|null",
+			"required": false,
+			"description": "Account ID of the user to stop on. Provide either this or stopOnAssigneeEmail."
+		},
+		"stopOnAssigneeEmail": {
+			"type": "string|null",
+			"required": false,
+			"description": "Email of the user to stop on (will be resolved to accountId if possible). Provide either this or stopOnAssigneeAccountId."
+		},
+		"includeFields": {
+			"type": "array",
+			"required": false,
+			"description": "List of field IDs to include in the output. If omitted, a sensible default set is used."
+		},
+		"expandChangelog": {
+			"type": "boolean",
+			"required": false,
+			"default": true,
+			"description": "If true, expands changelog in search to detect assignee changes precisely."
+		},
+		"pollIntervalSeconds": {
+			"type": "integer",
+			"required": false,
+			"default": 5,
+			"description": "Polling interval in seconds."
+		},
+		"maxDurationSeconds": {
+			"type": "integer",
+			"required": false,
+			"default": 600,
+			"description": "Maximum listening duration in seconds before timing out."
+		},
+		"pageSize": {
+			"type": "integer",
+			"required": false,
+			"default": 50,
+			"description": "Number of issues to fetch per page (1-100)."
+		},
+		"jqlFilter": {
+			"type": "string",
+			"required": false,
+			"description": "Additional JQL to AND with the project filter, e.g. status != Done."
+		}
+	},
+	"configuration": {
+		"baseUrl": "https://gcc-innovative.atlassian.net",
+		"projectKey": "ENG",
+		"stopOnAssigneeAccountId": null,
+		"stopOnAssigneeEmail": "tsach@actionai.co",
+		"includeFields": [
+			"summary",
+			"description",
+			"assignee",
+			"updated",
+			"created",
+			"priority",
+			"status",
+			"reporter"
+		],
+		"expandChangelog": true,
+		"pollIntervalSeconds": 5,
+		"maxDurationSeconds": 300,
+		"pageSize": 50,
+		"jqlFilter": ""
+	},
+	"requirements": [
+		"requests==2.31.0"
+	],
+	"runtime": {
+		"entryPoint": "main.py",
+		"timeoutMs": 600000,
+		"memoryMb": 256,
+		"cpus": 0.5
+	},
+	"files": {
+		"main.py": "import json, os, time, sys\nfrom datetime import datetime, timezone\nimport requests\n\n# Jira listener connector: polls Jira Cloud REST API v3 for issues in a project and stops when assignment changes to a specific user.\n# Endpoints used (non-deprecated):\n# - GET /rest/api/3/search (with JQL and optional expand=changelog)\n# - GET /rest/api/3/user/search?query= (optional, to resolve email to accountId)\n\nISO_FMT = \"%Y-%m-%dT%H:%M:%S.%fZ\"\nJQL_TS_FMT = \"%Y-%m-%d %H:%M\"  # JQL accepts quoted date-time in this format (server local time). We'll use UTC and let Jira interpret appropriately.\n\ndef load_connector_config(path=\"/run/connector.json\"):\n    try:\n        with open(path, \"r\") as f:\n            return json.load(f)\n    except Exception as e:\n        print(json.dumps({\"error\": f\"Failed to load connector config: {e}\"}), flush=True)\n        sys.exit(1)\n\ndef http_session(email, api_token):\n    s = requests.Session()\n    s.auth = (email, api_token)\n    s.headers.update({\"Accept\": \"application/json\", \"User-Agent\": \"jira-listener-connector/1.0\"})\n    return s\n\ndef resolve_account_id(session, base_url, email):\n    if not email:\n        return None\n    try:\n        # Docs: GET /rest/api/3/user/search with 'query' parameter returns users matching string (name/email). Requires appropriate permissions.\n        resp = session.get(f\"{base_url}/rest/api/3/user/search\", params={\"query\": email, \"maxResults\": 10}, timeout=30)\n        if resp.status_code == 200:\n            users = resp.json()\n            for u in users:\n                # Prefer exact email match if available\n                if u.get(\"emailAddress\") and u[\"emailAddress\"].lower() == email.lower():\n                    return u.get(\"accountId\")\n            # Fallback: take first result\n            if users:\n                return users[0].get(\"accountId\")\n        else:\n            # Could be 403 if lacking permission; fall through to None\n            pass\n    except Exception:\n        pass\n    return None\n\ndef parse_updated(ts):\n    # Jira 'updated' is ISO8601 Zulu, e.g., 2024-10-23T12:34:56.789+0000 or with 'Z'\n    # We'll try multiple formats.\n    for fmt in [\"%Y-%m-%dT%H:%M:%S.%f%z\", \"%Y-%m-%dT%H:%M:%S.%fZ\", \"%Y-%m-%dT%H:%M:%S%z\", \"%Y-%m-%dT%H:%M:%SZ\"]:\n        try:\n            dt = datetime.strptime(ts, fmt)\n            if dt.tzinfo is None:\n                dt = dt.replace(tzinfo=timezone.utc)\n            return dt.astimezone(timezone.utc)\n        except Exception:\n            continue\n    return None\n\ndef fmt_jql_dt(dt_utc):\n    # Format datetime for JQL quoted date-time\n    return dt_utc.astimezone(timezone.utc).strftime(JQL_TS_FMT)\n\ndef search_issues(session, base_url, jql, fields, expand, page_size):\n    start_at = 0\n    while True:\n        params = {\"jql\": jql, \"maxResults\": page_size, \"startAt\": start_at}\n        if fields:\n            params[\"fields\"] = \",\".join(fields)\n        if expand:\n            params[\"expand\"] = \",\".join(expand)\n        resp = session.get(f\"{base_url}/rest/api/3/search\", params=params, timeout=60)\n        if resp.status_code == 429:\n            time.sleep(5)\n            continue\n        resp.raise_for_status()\n        data = resp.json()\n        issues = data.get(\"issues\", [])\n        for issue in issues:\n            yield issue\n        total = data.get(\"total\", 0)\n        start_at += len(issues)\n        if start_at >= total or len(issues) == 0:\n            break\n\ndef find_assignee_change(issue, target_account_id):\n    # Examine changelog for assignee changes to target_account_id\n    clog = issue.get(\"changelog\") or {}\n    histories = clog.get(\"histories\") or []\n    for h in histories:\n        for item in h.get(\"items\", []):\n            if item.get(\"field\") == \"assignee\":\n                to_val = item.get(\"to\")\n                # For GDPR-compliant Cloud, 'to' for user fields should be accountId; fallback to 'toString' is display name\n                if target_account_id and to_val == target_account_id:\n                    return {\"matched\": True, \"matchedAt\": h.get(\"created\")}\n    return {\"matched\": False}\n\ndef main():\n    cfg = load_connector_config()\n    auth = cfg.get(\"auth\", {})\n    conf = cfg.get(\"configuration\", {})\n\n    base_url = conf.get(\"baseUrl\")\n    project_key = conf.get(\"projectKey\")\n    stop_account_id = conf.get(\"stopOnAssigneeAccountId\")\n    stop_email = conf.get(\"stopOnAssigneeEmail\")\n    include_fields = conf.get(\"includeFields\") or [\"summary\", \"description\", \"assignee\", \"updated\", \"created\", \"priority\", \"status\", \"reporter\"]\n    expand_changelog = bool(conf.get(\"expandChangelog\", True))\n    poll_interval = int(conf.get(\"pollIntervalSeconds\", 5))\n    max_duration = int(conf.get(\"maxDurationSeconds\", 600))\n    page_size = int(conf.get(\"pageSize\", 50))\n    jql_filter = conf.get(\"jqlFilter\") or \"\"\n\n    email = auth.get(\"email\")\n    api_token = auth.get(\"apiToken\")\n\n    errors = []\n    if not base_url or not isinstance(base_url, str):\n        errors.append(\"configuration.baseUrl is required\")\n    if not project_key:\n        errors.append(\"configuration.projectKey is required\")\n    if not email or not api_token:\n        errors.append(\"auth.email and auth.apiToken are required\")\n    if errors:\n        print(json.dumps({\"error\": \"; \".join(errors)}))\n        return\n\n    base_url = base_url.rstrip(\"/\")\n    session = http_session(email, api_token)\n\n    # Resolve accountId from email if needed\n    if not stop_account_id and stop_email:\n        stop_account_id = resolve_account_id(session, base_url, stop_email)\n    if not stop_account_id:\n        print(json.dumps({\"error\": \"Provide either configuration.stopOnAssigneeAccountId or configuration.stopOnAssigneeEmail (resolvable).\"}))\n        return\n\n    start_time = datetime.now(timezone.utc)\n    last_query_time = start_time\n    aggregated = {}\n    matched_issue_key = None\n    matched_at_iso = None\n\n    # Build static JQL base\n    base_jql = f\"project = {project_key}\"\n    if jql_filter:\n        base_jql = f\"{base_jql} AND ({jql_filter})\"\n\n    expand = [\"changelog\"] if expand_changelog else []\n\n    try:\n        while True:\n            now = datetime.now(timezone.utc)\n            elapsed = (now - start_time).total_seconds()\n            if elapsed >= max_duration:\n                break\n\n            jql_time_str = fmt_jql_dt(last_query_time)\n            jql = f\"{base_jql} AND updated >= \\\"{jql_time_str}\\\" ORDER BY updated ASC\"\n\n            latest_seen_updated = last_query_time\n            for issue in search_issues(session, base_url, jql, include_fields, expand, page_size):\n                key = issue.get(\"key\")\n                fields = issue.get(\"fields\", {})\n                updated_str = fields.get(\"updated\")\n                updated_dt = parse_updated(updated_str) if updated_str else None\n                if updated_dt and updated_dt > latest_seen_updated:\n                    latest_seen_updated = updated_dt\n\n                # Store aggregation\n                aggregated[key] = {\n                    \"id\": issue.get(\"id\"),\n                    \"key\": key,\n                    \"fields\": fields,\n                    \"seenAt\": datetime.now(timezone.utc).strftime(ISO_FMT)\n                }\n\n                # Stop condition via changelog\n                if expand_changelog:\n                    match = find_assignee_change(issue, stop_account_id)\n                    if match.get(\"matched\"):\n                        matched_issue_key = key\n                        matched_at_iso = match.get(\"matchedAt\") or datetime.now(timezone.utc).strftime(ISO_FMT)\n                        raise StopIteration\n\n                # Fallback: current assignee equals target\n                assignee = fields.get(\"assignee\")\n                if assignee and assignee.get(\"accountId\") == stop_account_id:\n                    matched_issue_key = key\n                    matched_at_iso = datetime.now(timezone.utc).strftime(ISO_FMT)\n                    raise StopIteration\n\n            # Advance window\n            last_query_time = latest_seen_updated\n            time.sleep(max(1, poll_interval))\n    except StopIteration:\n        pass\n    except requests.HTTPError as e:\n        print(json.dumps({\"error\": f\"HTTP error: {e}\", \"details\": getattr(e, \"response\", None).text if getattr(e, \"response\", None) is not None else None}))\n        return\n    except Exception as e:\n        print(json.dumps({\"error\": f\"Unexpected error: {e}\"}))\n        return\n\n    result = {\n        \"status\": \"ok\",\n        \"projectKey\": project_key,\n        \"stopped\": matched_issue_key is not None,\n        \"stopReason\": \"assigneeMatched\" if matched_issue_key else \"timeout\",\n        \"matchedIssueKey\": matched_issue_key,\n        \"matchedAt\": matched_at_iso,\n        \"issuesCollectedCount\": len(aggregated),\n        \"collectedIssues\": list(aggregated.values())\n    }\n    print(json.dumps(result), flush=True)\n\nif __name__ == \"__main__\":\n    main()\n"
+	}
+}

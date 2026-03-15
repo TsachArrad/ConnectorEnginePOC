@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import Chat from './components/Chat'
+import CodeChecker from './components/CodeChecker'
 import Storage from './components/Storage'
 import Validation from './components/Validation'
 import RunEngine from './components/RunEngine'
@@ -11,6 +12,7 @@ function App() {
 
   const tabs = [
     { id: 'chat', label: 'Chat' },
+    { id: 'checker', label: 'Code Checker' },
     { id: 'storage', label: 'Storage' },
     { id: 'validation', label: 'Validation' },
     { id: 'engine', label: 'Run Engine' },
@@ -37,6 +39,7 @@ function App() {
 
       <div className="content">
         {activeTab === 'chat' && <Chat />}
+        {activeTab === 'checker' && <CodeChecker />}
         {activeTab === 'storage' && <Storage />}
         {activeTab === 'validation' && <Validation />}
         {activeTab === 'engine' && <RunEngine />}

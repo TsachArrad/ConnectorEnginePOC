@@ -5,9 +5,43 @@ import './Chat.css'
 function Chat() {
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState('')
+  const [apiDocs, setApiDocs] = useState([''])
+  const [documentation, setDocumentation] = useState([''])
   const [loading, setLoading] = useState(false)
   const [response, setResponse] = useState(null)
   const [error, setError] = useState(null)
+
+  const handleAddApiDoc = () => {
+    setApiDocs([...apiDocs, ''])
+  }
+
+  const handleRemoveApiDoc = (index) => {
+    if (apiDocs.length > 1) {
+      setApiDocs(apiDocs.filter((_, i) => i !== index))
+    }
+  }
+
+  const handleApiDocChange = (index, value) => {
+    const newApiDocs = [...apiDocs]
+    newApiDocs[index] = value
+    setApiDocs(newApiDocs)
+  }
+
+  const handleAddDocumentation = () => {
+    setDocumentation([...documentation, ''])
+  }
+
+  const handleRemoveDocumentation = (index) => {
+    if (documentation.length > 1) {
+      setDocumentation(documentation.filter((_, i) => i !== index))
+    }
+  }
+
+  const handleDocumentationChange = (index, value) => {
+    const newDocumentation = [...documentation]
+    newDocumentation[index] = value
+    setDocumentation(newDocumentation)
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -18,6 +52,9 @@ function Chat() {
     setResponse(null)
 
     try {
+      const apiDocsString = apiDocs.filter(doc => doc.trim()).join(' + ')
+      const documentationString = documentation.filter(doc => doc.trim()).join(' + ')
+      
       const res = await axios.post('/api/chat', {
         messages: [
           {
@@ -25,7 +62,9 @@ function Chat() {
             content: prompt
           }
         ],
-        ...(model && { model })
+        ...(model && { model }),
+        ...(apiDocsString && { api_docs: apiDocsString }),
+        ...(documentationString && { documentation: documentationString })
       })
       setResponse(res.data)
     } catch (err) {
@@ -53,6 +92,78 @@ function Chat() {
             rows={6}
             disabled={loading}
           />
+        </div>
+
+        <div className="form-group">
+          <label>API Documentation Links (optional)</label>
+          {apiDocs.map((doc, index) => (
+            <div key={index} className="api-doc-input-group">
+              <input
+                type="text"
+                value={doc}
+                onChange={(e) => handleApiDocChange(index, e.target.value)}
+                placeholder="https://api-docs.example.com/reference"
+                disabled={loading}
+                className="api-doc-input"
+              />
+              {apiDocs.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveApiDoc(index)}
+                  disabled={loading}
+                  className="btn-remove"
+                  title="Remove"
+                >
+                  −
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleAddApiDoc}
+            disabled={loading}
+            className="btn-add"
+          >
+            + Add Another Link
+          </button>
+          <small className="form-hint">Add links to API documentation to help generate more accurate connectors</small>
+        </div>
+
+        <div className="form-group">
+          <label>Additional Documentation (optional)</label>
+          {documentation.map((doc, index) => (
+            <div key={index} className="api-doc-input-group">
+              <input
+                type="text"
+                value={doc}
+                onChange={(e) => handleDocumentationChange(index, e.target.value)}
+                placeholder="https://docs.example.com/guide or paste documentation text"
+                disabled={loading}
+                className="api-doc-input"
+              />
+              {documentation.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveDocumentation(index)}
+                  disabled={loading}
+                  className="btn-remove"
+                  title="Remove"
+                >
+                  −
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleAddDocumentation}
+            disabled={loading}
+            className="btn-add"
+          >
+            + Add Another Documentation
+          </button>
+          <small className="form-hint">Add links or text snippets from documentation, guides, or specifications</small>
         </div>
 
         <div className="form-group">

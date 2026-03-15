@@ -1,0 +1,66 @@
+{
+  "auth": {
+    "email": "your-email@example.com",
+    "apiToken": "your-api-token"
+  },
+  "configurationTypes": {
+    "jiraBaseUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Base URL of your Jira instance, e.g., https://your-domain.atlassian.net"
+    },
+    "issueKey": {
+      "type": "string",
+      "required": true,
+      "description": "Issue key to check, e.g., ABC-123"
+    },
+    "userAccountId": {
+      "type": "string",
+      "required": false,
+      "description": "Jira Cloud accountId to match against the issue assignee.fields.accountId"
+    },
+    "assigneeName": {
+      "type": "string",
+      "required": false,
+      "description": "Jira username or displayName to match (useful for Server/DC or when accountId is unavailable)"
+    },
+    "userEmail": {
+      "type": "string",
+      "required": false,
+      "description": "Assignee emailAddress to match (may be unavailable/redacted on Jira Cloud)"
+    },
+    "timeoutSeconds": {
+      "type": "integer",
+      "required": false,
+      "default": 60,
+      "description": "Maximum time to wait in seconds before returning nothing (empty result)"
+    },
+    "pollIntervalSeconds": {
+      "type": "integer",
+      "required": false,
+      "default": 5,
+      "description": "Seconds between polls to Jira"
+    }
+  },
+  "configuration": {
+    "jiraBaseUrl": "https://your-domain.atlassian.net",
+    "issueKey": "ABC-123",
+    "userAccountId": null,
+    "assigneeName": null,
+    "userEmail": null,
+    "timeoutSeconds": 60,
+    "pollIntervalSeconds": 5
+  },
+  "requirements": [
+    "requests==2.31.0"
+  ],
+  "runtime": {
+    "entryPoint": "main.py",
+    "timeoutMs": 600000,
+    "memoryMb": 256,
+    "cpus": 0.5
+  },
+  "files": {
+    "main.py": "import os,sys,time,json,requests\n\ndef load_cfg():\n    p='/run/connector.json'\n    try:\n        with open(p,'r',encoding='utf-8') as f:\n            return json.load(f)\n    except Exception as e:\n        print(json.dumps({'error':'Failed to load connector.json','file':'main.py','details':str(e)})); sys.exit(1)\n\ncfg=load_cfg()\nauth=cfg.get('auth',{}) or {}\nconf=cfg.get('configuration',{}) or {}\nbase_url=(conf.get('jiraBaseUrl') or '').strip()\nissue_key=(conf.get('issueKey') or '').strip()\nuser_account_id=conf.get('userAccountId')\nassignee_name=conf.get('assigneeName')\nuser_email=conf.get('userEmail')\ntry:\n    timeout_s=int(conf.get('timeoutSeconds',60))\nexcept Exception:\n    timeout_s=60\ntry:\n    interval_s=float(conf.get('pollIntervalSeconds',5))\nexcept Exception:\n    interval_s=5.0\ninterval_s=interval_s if interval_s>0 else 1.0\nemail=(auth.get('email') or '').strip()\napi_token=(auth.get('apiToken') or '').strip()\nmissing=[]\nif not base_url: missing.append('configuration.jiraBaseUrl')\nif not issue_key: missing.append('configuration.issueKey')\nif not email: missing.append('auth.email')\nif not api_token: missing.append('auth.apiToken')\nif missing:\n    print(json.dumps({'error':'Missing required fields','file':'main.py','missing':missing})); sys.exit(1)\nif not (user_account_id or assignee_name or user_email):\n    print(json.dumps({'error':'Provide at least one of configuration.userAccountId, configuration.assigneeName, configuration.userEmail','file':'main.py'})); sys.exit(1)\n\nsess=requests.Session()\nsess.headers.update({'Accept':'application/json'})\nbase_url=base_url.rstrip('/')\n\ndef fetch_issue(ver):\n    url=f\"{base_url}/rest/api/{ver}/issue/{issue_key}?fields=assignee\"\n    try:\n        r=sess.get(url,auth=(email,api_token),timeout=20)\n    except Exception as e:\n        return ('request_error',{'message':str(e)})\n    if r.status_code==429:\n        try:\n            ra=float(r.headers.get('Retry-After','1'))\n        except Exception:\n            ra=1.0\n        time.sleep(min(max(ra,0.1),interval_s))\n        return ('retry',None)\n    if r.status_code==404:\n        return ('notfound',None)\n    if not r.ok:\n        return ('http_error',{'status':r.status_code,'text':r.text[:500]})\n    try:\n        data=r.json()\n    except Exception:\n        return ('parse_error',{'text':r.text[:500]})\n    assignee=(data.get('fields') or {}).get('assignee')\n    return ('ok',assignee)\n\nstart=time.time()\napi_versions=['3','2']\nver_idx=0\nwhile True:\n    st,ass=fetch_issue(api_versions[ver_idx])\n    if st=='retry':\n        pass\n    elif st=='notfound':\n        if ver_idx==0:\n            ver_idx=1; continue\n        else:\n            print(json.dumps({'error':'Issue not found','file':'main.py','issueKey':issue_key})); sys.exit(1)\n    elif st in ('request_error','http_error','parse_error'):\n        print(json.dumps({'error':'Jira API request failed','file':'main.py','details':ass})); sys.exit(1)\n    elif st=='ok':\n        if ass:\n            match=False\n            try:\n                if user_account_id and ass.get('accountId')==user_account_id: match=True\n                if not match and assignee_name and (ass.get('name')==assignee_name or ass.get('displayName')==assignee_name): match=True\n                if not match and user_email and ass.get('emailAddress')==user_email: match=True\n            except Exception:\n                match=False\n            if match:\n                out={'status':'assigned','issueKey':issue_key,'assignee':{'accountId':ass.get('accountId'),'displayName':ass.get('displayName'),'emailAddress':ass.get('emailAddress'),'name':ass.get('name')}}\n                print(json.dumps(out)); sys.exit(0)\n    if time.time()-start>=timeout_s:\n        print('{}'); sys.exit(0)\n    time.sleep(interval_s)\n"
+  }
+}

@@ -1,0 +1,55 @@
+{
+    "auth": {
+        "email": "tsach@actionai.co",
+        "apiToken": "ATATT3xFfGF0Le3JQmDb3XIX1H9X8Fxc9Ceu0eNCiVk0I9KYS7IWsDqP55brw16O6jJRu2DC8PiTPUKFakMSOCZm_BFLQGq5k_EFVLBWOI0ThZ10pVALubuYoWbU9hbmVstnabi3J5GpJfJBky05CyIXcGgRT2-tKZCMHxn0o9qodSKqAF7-sDA=1D951110"
+    },
+    "configurationTypes": {
+        "baseUrl": {
+            "type": "string",
+            "required": true,
+            "description": "Jira Cloud base URL, e.g. https://your-domain.atlassian.net"
+        },
+        "assigneeAccountId": {
+            "type": "string",
+            "required": true,
+            "description": "Target user's Atlassian accountId to detect assignment to. Example: 5b10a2844c20165700ede21g"
+        },
+        "pollIntervalSeconds": {
+            "type": "integer",
+            "required": false,
+            "default": 5,
+            "description": "Seconds to wait between checks"
+        },
+        "maxWaitSeconds": {
+            "type": "integer",
+            "required": false,
+            "default": 300,
+            "description": "Maximum total seconds to wait before timing out"
+        },
+        "jqlScope": {
+            "type": "string|null",
+            "required": false,
+            "default": "",
+            "description": "Optional additional JQL clause to narrow search scope, e.g. project = ABC AND statusCategory != Done (do not include ORDER BY)"
+        }
+    },
+    "configuration": {
+        "baseUrl": "https://gcc-innovative.atlassian.net/",
+        "assigneeAccountId": "712020:8b691c61-3924-42c2-a65b-6d6ea06be5d4",
+        "pollIntervalSeconds": 5,
+        "maxWaitSeconds": 300,
+        "jqlScope": ""
+    },
+    "requirements": [
+        "requests==2.31.0"
+    ],
+    "runtime": {
+        "entryPoint": "main.py",
+        "timeoutMs": 600000,
+        "memoryMb": 256,
+        "cpus": 0.5
+    },
+    "files": {
+		"main.py": "import os\nimport json\nimport time\nimport sys\nimport requests\nimport datetime as dt\n\n\ndef _now_utc():\n    return dt.datetime.utcnow().replace(tzinfo=dt.timezone.utc)\n\n\ndef _fmt_jql_time(ts):\n    return ts.strftime('%Y/%m/%d %H:%M')\n\n\ndef _load_connector():\n    try:\n        with open('/run/connector.json', 'r', encoding='utf-8') as f:\n            return json.load(f)\n    except Exception:\n        return {'file': 'main.py'}\n\n\ndef _build_session(email, api_token):\n    s = requests.Session()\n    s.auth = (email, api_token)\n    s.headers.update({'Accept': 'application/json'})\n    return s\n\n\ndef _parse_search_response(resp):\n    if resp.status_code == 429:\n        ra = resp.headers.get('Retry-After')\n        return {\n            'retry_after': int(ra) if ra and ra.isdigit() else 60,\n            'status_code': resp.status_code,\n            'file': 'main.py',\n        }\n\n    if not resp.ok:\n        text = None\n        try:\n            text = resp.text\n        except Exception:\n            text = None\n        return {\n            'error': f'HTTP {resp.status_code}',\n            'status_code': resp.status_code,\n            'text': text,\n            'file': 'main.py',\n        }\n\n    data = resp.json()\n    issues = data.get('issues', [])\n    if issues:\n        issue = issues[0]\n        return {'found': True, 'issueKey': issue.get('key')}\n\n    return {'found': False, 'file': 'main.py'}\n\n\ndef _search_once(session, base_url, jql):\n    base = base_url.rstrip('/')\n\n    # Prefer the new GET /rest/api/3/search/jql endpoint; fallback to POST /rest/api/3/search\n    try:\n        url_get = base + '/rest/api/3/search/jql'\n        params = {'jql': jql, 'maxResults': 1, 'fields': 'key'}\n        resp = session.get(url_get, params=params, timeout=30)\n\n        if resp.status_code in (404, 405, 410):\n            url_post = base + '/rest/api/3/search'\n            payload = {'jql': jql, 'maxResults': 1, 'fields': ['key']}\n            resp = session.post(url_post, json=payload, timeout=30)\n\n        return _parse_search_response(resp)\n\n    except requests.RequestException as e:\n        return {'error': str(e), 'status_code': None, 'text': None, 'file': 'main.py'}\n\n\ndef main():\n    cfg_all = _load_connector()\n    auth = cfg_all.get('auth', {})\n    conf = cfg_all.get('configuration', {})\n\n    email = auth.get('email') or os.environ.get('AUTH_EMAIL')\n    api_token = auth.get('apiToken') or os.environ.get('AUTH_APITOKEN')\n    base_url = conf.get('baseUrl') or os.environ.get('CONFIG_BASEURL')\n    assignee_id = conf.get('assigneeAccountId') or os.environ.get('CONFIG_ASSIGNEEACCOUNTID')\n    poll = int(conf.get('pollIntervalSeconds', 5) or 5)\n    max_wait = int(conf.get('maxWaitSeconds', 300) or 300)\n    jql_scope = (conf.get('jqlScope') or '').strip()\n\n    start = _now_utc()\n    deadline = start + dt.timedelta(seconds=max_wait)\n\n    if not email or not api_token or not base_url or not assignee_id:\n        out = {\n            'status': 'error',\n            'message': 'Missing required configuration/auth: email, apiToken, baseUrl, assigneeAccountId must be provided',\n        }\n        print(json.dumps(out))\n        return\n\n    session = _build_session(email, api_token)\n\n    base_clause = f\"assignee CHANGED TO accountId({assignee_id}) AFTER '{_fmt_jql_time(start)}'\"\n    jql = f\"({jql_scope}) AND {base_clause}\" if jql_scope else base_clause\n\n    while True:\n        now = _now_utc()\n\n        if now >= deadline:\n            out = {\n                'status': 'timeout',\n                'found': False,\n                'message': f'No assignment to target user detected within {max_wait} seconds',\n                'assigneeAccountId': assignee_id,\n                'jqlUsed': jql,\n                'startedAtUtc': start.isoformat().replace('+00:00', 'Z'),\n                'endedAtUtc': now.isoformat().replace('+00:00', 'Z'),\n                'durationSeconds': int((now - start).total_seconds()),\n            }\n            print(json.dumps(out))\n            return\n\n        try:\n            res = _search_once(session, base_url, jql)\n        except Exception as e:\n            out = {'status': 'error', 'message': str(e)}\n            print(json.dumps(out))\n            return\n\n        if 'retry_after' in res:\n            sleep_s = max(res.get('retry_after', poll), poll)\n            time.sleep(min(sleep_s, max_wait))\n            continue\n\n        if 'error' in res:\n            out = {\n                'status': 'error',\n                'message': res.get('error'),\n                'httpStatus': res.get('status_code'),\n                'details': res.get('text'),\n                'jqlUsed': jql,\n                'file': 'main.py',\n            }\n            print(json.dumps(out))\n            return\n\n        if res.get('found'):\n            key = res.get('issueKey')\n            out = {\n                'status': 'success',\n                'found': True,\n                'assigneeAccountId': assignee_id,\n                'matchedIssueKey': key,\n                'matchedIssueUrl': base_url.rstrip('/') + '/browse/' + key,\n                'jqlUsed': jql,\n                'startedAtUtc': start.isoformat().replace('+00:00', 'Z'),\n                'endedAtUtc': now.isoformat().replace('+00:00', 'Z'),\n                'durationSeconds': int((now - start).total_seconds()),\n            }\n            print(json.dumps(out))\n            return\n\n        time.sleep(poll)\n\n\nif __name__ == '__main__':\n    main()\n"
+    }
+}

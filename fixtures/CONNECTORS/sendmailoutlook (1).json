@@ -1,0 +1,87 @@
+{
+  "auth": {
+    "tenantId": "00000000-0000-0000-0000-000000000000",
+    "clientId": "00000000-0000-0000-0000-000000000000",
+    "clientSecret": "replace-with-client-secret"
+  },
+  "configurationTypes": {
+    "fromAddress": {
+      "type": "string",
+      "required": true,
+      "description": "Shared mailbox email address to send from (e.g., shared@yourdomain.com)"
+    },
+    "recipients": {
+      "type": "array",
+      "required": true,
+      "description": "List of recipient email addresses"
+    },
+    "cc": {
+      "type": "array",
+      "required": false,
+      "description": "Optional list of CC recipient email addresses"
+    },
+    "bcc": {
+      "type": "array",
+      "required": false,
+      "description": "Optional list of BCC recipient email addresses"
+    },
+    "replyTo": {
+      "type": "array",
+      "required": false,
+      "description": "Optional list of reply-to email addresses"
+    },
+    "subject": {
+      "type": "string",
+      "required": true,
+      "description": "Email subject line"
+    },
+    "body": {
+      "type": "string",
+      "required": true,
+      "description": "Email body content"
+    },
+    "contentType": {
+      "type": "string",
+      "required": false,
+      "enum": ["text", "html"],
+      "default": "text",
+      "description": "Email body type: 'text' or 'html'"
+    },
+    "saveToSentItems": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Whether to save the message to Sent Items"
+    },
+    "attachments": {
+      "type": "array",
+      "required": false,
+      "description": "Optional attachments: array of objects with name, contentType, contentBytes (base64)"
+    }
+  },
+  "configuration": {
+    "fromAddress": "shared@yourdomain.com",
+    "recipients": ["recipient1@yourdomain.com", "recipient2@yourdomain.com"],
+    "cc": [],
+    "bcc": [],
+    "replyTo": [],
+    "subject": "Test email from Azure shared mailbox",
+    "body": "Hello,\n\nThis is a test email sent via the Azure shared mailbox connector.",
+    "contentType": "text",
+    "saveToSentItems": true,
+    "attachments": []
+  },
+  "requirements": [
+    "requests==2.31.0",
+    "msal==1.26.0"
+  ],
+  "runtime": {
+    "entryPoint": "main.py",
+    "timeoutMs": 60000,
+    "memoryMb": 256,
+    "cpus": 0.5
+  },
+  "files": {
+    "main.py": "import os\nimport sys\nimport json\nimport base64\nimport requests\nimport msal\n\ndef load_connector_json(path=\"/run/connector.json\"):\n    try:\n        with open(path, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception as e:\n        print(json.dumps({\"ok\": False, \"error\": f\"Failed to read connector.json: {e}\"}))\n        sys.exit(1)\n\ndef get_auth(cfg):\n    auth = cfg.get(\"auth\", {})\n    tenant_id = os.getenv(\"AUTH_TENANTID\") or auth.get(\"tenantId\") or auth.get(\"tenant_id\")\n    client_id = os.getenv(\"AUTH_CLIENTID\") or auth.get(\"clientId\") or auth.get(\"client_id\")\n    client_secret = os.getenv(\"AUTH_CLIENTSECRET\") or auth.get(\"clientSecret\") or auth.get(\"client_secret\")\n    if not tenant_id or not client_id or not client_secret:\n        print(json.dumps({\"ok\": False, \"error\": \"Missing Azure AD credentials: tenantId, clientId, clientSecret\"}))\n        sys.exit(1)\n    return tenant_id, client_id, client_secret\n\ndef normalize_emails(value):\n    if value is None:\n        return []\n    if isinstance(value, str):\n        return [e.strip() for e in value.split(\",\") if e.strip()]\n    if isinstance(value, list):\n        return [str(e).strip() for e in value if str(e).strip()]\n    return []\n\ndef build_message(conf):\n    from_address = conf.get(\"fromAddress\")\n    recipients = normalize_emails(conf.get(\"recipients\"))\n    cc = normalize_emails(conf.get(\"cc\"))\n    bcc = normalize_emails(conf.get(\"bcc\"))\n    reply_to = normalize_emails(conf.get(\"replyTo\"))\n    subject = conf.get(\"subject\")\n    body = conf.get(\"body\")\n    content_type = str(conf.get(\"contentType\") or \"text\").strip().lower()\n    save_to_sent = bool(conf.get(\"saveToSentItems\", True))\n    attachments = conf.get(\"attachments\") or []\n\n    if not from_address:\n        return None, None, \"configuration.fromAddress is required\"\n    if not recipients:\n        return None, None, \"configuration.recipients must contain at least one email\"\n    if not subject:\n        return None, None, \"configuration.subject is required\"\n    if body is None:\n        return None, None, \"configuration.body is required\"\n\n    ct = \"HTML\" if content_type == \"html\" else \"Text\"\n\n    msg = {\n        \"subject\": subject,\n        \"body\": {\"contentType\": ct, \"content\": body},\n        \"toRecipients\": [{\"emailAddress\": {\"address\": a}} for a in recipients]\n    }\n    if cc:\n        msg[\"ccRecipients\"] = [{\"emailAddress\": {\"address\": a}} for a in cc]\n    if bcc:\n        msg[\"bccRecipients\"] = [{\"emailAddress\": {\"address\": a}} for a in bcc]\n    if reply_to:\n        msg[\"replyTo\"] = [{\"emailAddress\": {\"address\": a}} for a in reply_to]\n\n    atts = []\n    for att in attachments:\n        try:\n            name = att.get(\"name\")\n            content_type_att = att.get(\"contentType\") or \"application/octet-stream\"\n            content_bytes = att.get(\"contentBytes\")\n            if not name or not content_bytes:\n                continue\n            # Ensure contentBytes is base64 string\n            # Attempt a round-trip decode/encode to validate\n            try:\n                base64.b64decode(content_bytes)\n            except Exception:\n                # If not base64, try to encode provided text\n                content_bytes = base64.b64encode(str(content_bytes).encode(\"utf-8\")).decode(\"ascii\")\n            atts.append({\n                \"@odata.type\": \"#microsoft.graph.fileAttachment\",\n                \"name\": name,\n                \"contentType\": content_type_att,\n                \"contentBytes\": content_bytes\n            })\n        except Exception:\n            continue\n    if atts:\n        msg[\"attachments\"] = atts\n\n    payload = {\"message\": msg, \"saveToSentItems\": save_to_sent}\n    return from_address, payload, None\n\ndef acquire_token(tenant_id, client_id, client_secret):\n    authority = f\"https://login.microsoftonline.com/{tenant_id}\"\n    app = msal.ConfidentialClientApplication(client_id=client_id, authority=authority, client_credential=client_secret)\n    result = app.acquire_token_for_client(scopes=[\"https://graph.microsoft.com/.default\"])\n    if not result or \"access_token\" not in result:\n        return None, result\n    return result[\"access_token\"], None\n\ndef send_mail(access_token, from_address, payload):\n    url = f\"https://graph.microsoft.com/v1.0/users/{from_address}/sendMail\"\n    headers = {\"Authorization\": f\"Bearer {access_token}\", \"Content-Type\": \"application/json\"}\n    resp = requests.post(url, headers=headers, json=payload, timeout=30)\n    ok = 202 == resp.status_code or 204 == resp.status_code\n    return ok, resp.status_code, safe_resp_json(resp)\n\ndef safe_resp_json(resp):\n    try:\n        return resp.json()\n    except Exception:\n        return {\"text\": resp.text}\n\ndef main():\n    cfg = load_connector_json()\n    tenant_id, client_id, client_secret = get_auth(cfg)\n    from_address, payload, err = build_message(cfg.get(\"configuration\", {}))\n    if err:\n        print(json.dumps({\"ok\": False, \"error\": err}))\n        sys.exit(1)\n    token, token_err = acquire_token(tenant_id, client_id, client_secret)\n    if not token:\n        print(json.dumps({\"ok\": False, \"error\": \"Failed to acquire token\", \"details\": token_err}))\n        sys.exit(1)\n    ok, status, body = send_mail(token, from_address, payload)\n    if ok:\n        msg = payload.get(\"message\", {})\n        tos = [r.get(\"emailAddress\", {}).get(\"address\") for r in msg.get(\"toRecipients\", [])]\n        print(json.dumps({\"ok\": True, \"status\": status, \"sentFrom\": from_address, \"to\": tos}))\n        sys.exit(0)\n    else:\n        print(json.dumps({\"ok\": False, \"status\": status, \"error\": body}))\n        sys.exit(1)\n\nif __name__ == \"__main__\":\n    main()\n"
+  }
+}
